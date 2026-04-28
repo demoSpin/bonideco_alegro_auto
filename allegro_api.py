@@ -166,22 +166,48 @@ class AllegroClient:
         json_body: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
         context: str = "",
-        max_retries: int = 3,
+        max_retries: int = 4,
     ) -> dict[str, Any]:
-        """Issue a JSON request, auto-retrying on 409 OfferConflict.
+        """Issue a JSON request, auto-retrying on transient errors.
 
-        Allegro returns 409 when a previous offer edit is still being processed
-        on their side (race between POST create -> PATCH within milliseconds).
-        Retry with exponential backoff: 0.5s, 1s, 2s.
+        Retried (with exponential backoff 0.5s -> 1s -> 2s -> 4s):
+          - 409 OfferConflict (Allegro still processing previous edit)
+          - 5xx server errors (500/502/503/504)
+          - Network errors (ConnectError, ReadTimeout, RemoteProtocolError)
+
+        NOT retried (fail-fast):
+          - 401 (cookies expired) -> SessionExpired
+          - 403 / Datadome challenge -> DatadomeBlocked
+          - Other 4xx (client errors, retry won't help)
         """
+        last_network_error: Exception | None = None
         for attempt in range(max_retries):
             logger.debug(
                 f"{method} {url}  ({context})"
                 + (f"  [retry {attempt}]" if attempt else "")
             )
-            resp = await self._client.request(
-                method, url, json=json_body, headers=extra_headers
-            )
+            try:
+                resp = await self._client.request(
+                    method, url, json=json_body, headers=extra_headers
+                )
+            except (
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.ConnectTimeout,
+                httpx.WriteTimeout,
+                httpx.PoolTimeout,
+                httpx.RemoteProtocolError,
+            ) as e:
+                last_network_error = e
+                if attempt < max_retries - 1:
+                    wait = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        f"{method} {url} → network error {type(e).__name__}: {e}; "
+                        f"retry {attempt + 1}/{max_retries - 1} in {wait:.1f}s"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise
 
             ct = resp.headers.get("content-type", "")
             if "text/html" in ct or "datadome" in resp.text.lower()[:2000]:
@@ -195,14 +221,17 @@ class AllegroClient:
                 raise DatadomeBlocked(
                     f"403 on {method} {url}. Body preview: {resp.text[:300]}"
                 )
-            if resp.status_code == 409 and attempt < max_retries - 1:
-                wait = 0.5 * (2 ** attempt)  # 0.5, 1.0, 2.0 ...
+
+            transient = resp.status_code == 409 or 500 <= resp.status_code <= 599
+            if transient and attempt < max_retries - 1:
+                wait = 0.5 * (2 ** attempt)
                 logger.warning(
-                    f"{method} {url} → 409 conflict ({context}); "
+                    f"{method} {url} → {resp.status_code} ({context}); "
                     f"retry {attempt + 1}/{max_retries - 1} in {wait:.1f}s"
                 )
                 await asyncio.sleep(wait)
                 continue
+
             if resp.status_code >= 400:
                 raise httpx.HTTPStatusError(
                     f"{method} {url} → {resp.status_code}: {resp.text[:500]}",
@@ -211,6 +240,8 @@ class AllegroClient:
                 )
             return resp.json()
         # Should be unreachable — last iteration either returns or raises.
+        if last_network_error:
+            raise last_network_error
         raise RuntimeError("retry loop exhausted unexpectedly")
 
     async def create_offer(self, product_id: str) -> CreateOfferResult:
