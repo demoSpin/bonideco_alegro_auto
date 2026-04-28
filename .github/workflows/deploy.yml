@@ -1,0 +1,37 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            cd ~/bonideco_marketplace_bot
+            echo "==> git pull"
+            git fetch --depth 1 origin main
+            git reset --hard origin/main
+            echo "==> pip install"
+            ./.venv/bin/pip install -q -r requirements-prod.txt
+            echo "==> restart service"
+            sudo /bin/systemctl restart allegro-bot
+            sleep 3
+            sudo /bin/systemctl status allegro-bot --no-pager | head -20
+            echo "==> deploy ok"

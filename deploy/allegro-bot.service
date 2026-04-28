@@ -1,0 +1,32 @@
+[Unit]
+Description=Allegro Marketplace Telegram Bot (Bonideco)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+Group=botuser
+WorkingDirectory=/home/botuser/bonideco_marketplace_bot
+EnvironmentFile=/home/botuser/bonideco_marketplace_bot/.env
+ExecStart=/home/botuser/bonideco_marketplace_bot/.venv/bin/python bot.py
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=allegro-bot
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/botuser/bonideco_marketplace_bot
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
