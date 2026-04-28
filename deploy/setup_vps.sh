@@ -41,7 +41,10 @@ echo "Using $PYTHON_BIN ($($PYTHON_BIN --version))"
 echo "==> Ensuring git + venv support"
 PKGS=()
 command -v git >/dev/null 2>&1 || PKGS+=("git")
-"$PYTHON_BIN" -m venv --help >/dev/null 2>&1 || PKGS+=("${PYTHON_BIN}-venv")
+# `-m venv --help` always works (module is in stdlib) but creating a venv
+# fails without the `${PY}-venv` apt package (which ships ensurepip).
+# Check ensurepip directly.
+"$PYTHON_BIN" -c "import ensurepip" >/dev/null 2>&1 || PKGS+=("${PYTHON_BIN}-venv")
 if [ "${#PKGS[@]}" -gt 0 ]; then
     echo "Installing missing packages: ${PKGS[*]}"
     apt-get update -y
