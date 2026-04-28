@@ -20,7 +20,7 @@ GitHub Actions auto-deploy.
 On your local machine:
 
 ```bash
-cd C:/Users/deivi/Desktop/Projektai/bonideco_marketplace_bot
+cd C:/Users/deivi/Desktop/Projektai/bonideco_alegro_auto
 git init
 git add -A
 git commit -m "Initial commit"
@@ -64,13 +64,13 @@ sudo -u botuser ssh -T git@github.com   # should say "Hi <user>/<repo>! You've s
 
 If repo was cloned over HTTPS in step 3, switch remote:
 ```bash
-sudo -u botuser git -C /home/botuser/bonideco_marketplace_bot remote set-url origin git@github.com:<YOUR_USER>/<YOUR_REPO>.git
+sudo -u botuser git -C /home/botuser/bonideco_alegro_auto remote set-url origin git@github.com:<YOUR_USER>/<YOUR_REPO>.git
 ```
 
 ## 5. Configure .env
 
 ```bash
-sudo -u botuser nano /home/botuser/bonideco_marketplace_bot/.env
+sudo -u botuser nano /home/botuser/bonideco_alegro_auto/.env
 ```
 
 Fill at minimum:
@@ -132,7 +132,7 @@ journalctl -u allegro-bot -f
 journalctl -u allegro-bot -n 100 --no-pager
 
 # Edit .env (requires restart after)
-sudo -u botuser nano /home/botuser/bonideco_marketplace_bot/.env
+sudo -u botuser nano /home/botuser/bonideco_alegro_auto/.env
 sudo systemctl restart allegro-bot
 
 # Force a deploy from GitHub (without a code change)

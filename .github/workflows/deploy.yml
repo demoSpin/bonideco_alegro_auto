@@ -24,7 +24,7 @@ jobs:
           script_stop: true
           script: |
             set -e
-            cd ~/bonideco_marketplace_bot
+            cd ~/bonideco_alegro_auto
             echo "==> git pull"
             git fetch --depth 1 origin main
             git reset --hard origin/main

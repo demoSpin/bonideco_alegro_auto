@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=botuser
 Group=botuser
-WorkingDirectory=/home/botuser/bonideco_marketplace_bot
-EnvironmentFile=/home/botuser/bonideco_marketplace_bot/.env
-ExecStart=/home/botuser/bonideco_marketplace_bot/.venv/bin/python bot.py
+WorkingDirectory=/home/botuser/bonideco_alegro_auto
+EnvironmentFile=/home/botuser/bonideco_alegro_auto/.env
+ExecStart=/home/botuser/bonideco_alegro_auto/.venv/bin/python bot.py
 
 Restart=always
 RestartSec=5
@@ -22,7 +22,7 @@ SyslogIdentifier=allegro-bot
 
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/home/botuser/bonideco_marketplace_bot
+ReadWritePaths=/home/botuser/bonideco_alegro_auto
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
