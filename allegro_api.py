@@ -5,6 +5,7 @@ Loads session cookies from storage_state.json (produced by login.py) and
 calls the internal salescenter API directly via httpx.
 """
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -165,31 +166,52 @@ class AllegroClient:
         json_body: dict[str, Any] | None = None,
         extra_headers: dict[str, str] | None = None,
         context: str = "",
+        max_retries: int = 3,
     ) -> dict[str, Any]:
-        logger.debug(f"{method} {url}  ({context})")
-        resp = await self._client.request(
-            method, url, json=json_body, headers=extra_headers
-        )
+        """Issue a JSON request, auto-retrying on 409 OfferConflict.
 
-        ct = resp.headers.get("content-type", "")
-        if "text/html" in ct or "datadome" in resp.text.lower()[:2000]:
-            raise DatadomeBlocked(
-                f"Got HTML/Datadome response on {method} {url}. "
-                f"Status {resp.status_code}."
+        Allegro returns 409 when a previous offer edit is still being processed
+        on their side (race between POST create -> PATCH within milliseconds).
+        Retry with exponential backoff: 0.5s, 1s, 2s.
+        """
+        for attempt in range(max_retries):
+            logger.debug(
+                f"{method} {url}  ({context})"
+                + (f"  [retry {attempt}]" if attempt else "")
             )
-        if resp.status_code == 401:
-            raise SessionExpired(f"401 on {method} {url} — re-import cookies")
-        if resp.status_code == 403:
-            raise DatadomeBlocked(
-                f"403 on {method} {url}. Body preview: {resp.text[:300]}"
+            resp = await self._client.request(
+                method, url, json=json_body, headers=extra_headers
             )
-        if resp.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                f"{method} {url} → {resp.status_code}: {resp.text[:500]}",
-                request=resp.request,
-                response=resp,
-            )
-        return resp.json()
+
+            ct = resp.headers.get("content-type", "")
+            if "text/html" in ct or "datadome" in resp.text.lower()[:2000]:
+                raise DatadomeBlocked(
+                    f"Got HTML/Datadome response on {method} {url}. "
+                    f"Status {resp.status_code}."
+                )
+            if resp.status_code == 401:
+                raise SessionExpired(f"401 on {method} {url} — re-import cookies")
+            if resp.status_code == 403:
+                raise DatadomeBlocked(
+                    f"403 on {method} {url}. Body preview: {resp.text[:300]}"
+                )
+            if resp.status_code == 409 and attempt < max_retries - 1:
+                wait = 0.5 * (2 ** attempt)  # 0.5, 1.0, 2.0 ...
+                logger.warning(
+                    f"{method} {url} → 409 conflict ({context}); "
+                    f"retry {attempt + 1}/{max_retries - 1} in {wait:.1f}s"
+                )
+                await asyncio.sleep(wait)
+                continue
+            if resp.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    f"{method} {url} → {resp.status_code}: {resp.text[:500]}",
+                    request=resp.request,
+                    response=resp,
+                )
+            return resp.json()
+        # Should be unreachable — last iteration either returns or raises.
+        raise RuntimeError("retry loop exhausted unexpectedly")
 
     async def create_offer(self, product_id: str) -> CreateOfferResult:
         """Create a draft offer (publication.status=INACTIVE) for a catalog product."""
