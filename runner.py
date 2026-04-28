@@ -18,6 +18,7 @@ from loguru import logger
 
 from allegro_api import AllegroClient, DatadomeBlocked, SessionExpired
 from config import (
+    ALLOWED_BRANDS,
     LOGS_DIR,
     LONG_PAUSE_EVERY_N_ROWS,
     LONG_PAUSE_MAX,
@@ -27,6 +28,19 @@ from config import (
     ROW_DELAY_MIN,
     RUNS_DIR,
 )
+
+
+BRAND_PARAM_NAMES = {"brand", "marka", "producent", "manufacturer"}
+
+
+def _extract_brand(product: dict) -> str | None:
+    for param in product.get("parameters", []):
+        name = (param.get("name") or "").strip().lower()
+        if name in BRAND_PARAM_NAMES:
+            vals = param.get("valuesLabels") or []
+            if vals:
+                return vals[0].strip()
+    return None
 from excel_writer import RunExcelWriter
 from sheets import SheetRow
 
@@ -259,7 +273,32 @@ class RunController:
             self.excel.update(sr.row, status="skipped", notes="not in catalog")
             return
 
-        n_variants = len(search.products)
+        products_to_process = list(search.products)
+        brand_filtered_out: list[str] = []
+        if ALLOWED_BRANDS:
+            allowed: list[dict] = []
+            for p in search.products:
+                brand = _extract_brand(p)
+                if brand and brand.lower() in ALLOWED_BRANDS:
+                    allowed.append(p)
+                else:
+                    name = (p.get("name") or "?")[:40]
+                    brand_filtered_out.append(f"{name} (brand={brand or 'unknown'})")
+
+            if not allowed:
+                self.meta.skipped += 1
+                self.consecutive_errors = 0
+                self.meta.last_good_row = sr.row
+                details = "; ".join(brand_filtered_out[:5])
+                self.excel.update(
+                    sr.row,
+                    status="skipped",
+                    notes=f"brand-filtered all {len(search.products)} variants: {details}"[:500],
+                )
+                return
+            products_to_process = allowed
+
+        n_variants = len(products_to_process)
         is_multi = n_variants > 1
 
         offer_ids: list[str] = []
@@ -274,7 +313,7 @@ class RunController:
             "stock": {"available": str(sr.stock), "unit": "UNIT"},
         }
 
-        for idx, product in enumerate(search.products, start=1):
+        for idx, product in enumerate(products_to_process, start=1):
             product_id = product["id"]
             product_name = (product.get("name") or "")[:60]
             try:
@@ -300,9 +339,13 @@ class RunController:
             self.consecutive_errors = 0
             self.meta.last_good_row = sr.row
             offer_id_str = ", ".join(offer_ids)
-            if is_multi:
+            if is_multi or brand_filtered_out:
                 self.meta.multi_variant += 1
                 note_parts = [f"{len(offer_ids)}/{n_variants} variants OK"]
+                if brand_filtered_out:
+                    note_parts.append(
+                        f"brand-filtered: {'; '.join(brand_filtered_out[:3])}"
+                    )
                 if per_variant_errors:
                     note_parts.append("; ".join(per_variant_errors))
                 self.excel.update(
@@ -317,7 +360,7 @@ class RunController:
                     sr.row,
                     status="success",
                     offer_id=offer_id_str,
-                    notes=(search.products[0].get("name") or "")[:80],
+                    notes=(products_to_process[0].get("name") or "")[:80],
                 )
         else:
             err_msg = "; ".join(per_variant_errors)[:300] or "all variants failed"

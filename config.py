@@ -36,6 +36,14 @@ BROWSER_SEC_CH_UA_PLATFORM = os.getenv(
 SALES_CENTER_URL = "https://salescenter.allegro.com/my-sales"
 EDGE_API = "https://edge.salescenter.allegro.com"
 
+# Optional brand whitelist. If set, only create offers for products whose
+# Brand parameter matches one of these (case-insensitive). Empty = no filter,
+# all returned variants get offers. Set in .env, comma-separated.
+_brands_raw = os.getenv("ALLOWED_BRANDS", "").strip()
+ALLOWED_BRANDS: set[str] = {
+    b.strip().lower() for b in _brands_raw.split(",") if b.strip()
+}
+
 # Random delay between processed rows. Keeps us human-like and reduces
 # Datadome / rate-limit risk. Used as: random.uniform(MIN, MAX)
 ROW_DELAY_MIN = float(os.getenv("ROW_DELAY_MIN", "2.0"))
