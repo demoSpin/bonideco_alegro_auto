@@ -32,7 +32,9 @@ from allegro_api import AllegroClient, DatadomeBlocked, SessionExpired
 from bot_state import (
     append_completed_run,
     format_state_summary,
+    get_active_brands_display,
     load_state,
+    set_allowed_brands,
     update_cookies_meta,
 )
 from config import (
@@ -65,7 +67,8 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("▶ Run"), KeyboardButton("📋 Status")],
         [KeyboardButton("🍪 Upload Cookies"), KeyboardButton("🔍 Health")],
-        [KeyboardButton("📁 Past Runs"), KeyboardButton("⏹ Stop Run")],
+        [KeyboardButton("🏷 Brands"), KeyboardButton("📁 Past Runs")],
+        [KeyboardButton("⏹ Stop Run")],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -98,8 +101,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "👋 <b>Allegro Marketplace Bot</b>\n\n"
         f"{format_state_summary(state)}\n\n"
         "Use the buttons below, or type slash commands:\n"
-        "/upload_cookies, /health, /run, /status,\n"
-        "/runs, /download &lt;id&gt;, /cancel_run"
+        "/upload_cookies, /health, /run, /brands,\n"
+        "/status, /runs, /download &lt;id&gt;, /cancel_run"
     )
     await update.message.reply_text(
         text, parse_mode="HTML", reply_markup=MAIN_KEYBOARD
@@ -133,11 +136,18 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 @admin_only
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cleared: list[str] = []
     if context.user_data.pop("run_state", None) is not None:
         context.user_data.pop("run_ctx", None)
-        await update.message.reply_text("✗ Cancelled the /run dialog.")
-        return
-    await update.message.reply_text("Nothing pending. (For an active run use /cancel_run.)")
+        cleared.append("/run dialog")
+    awaiting = context.user_data.pop("awaiting", None)
+    if awaiting:
+        cleared.append(f"{awaiting} prompt")
+
+    if cleared:
+        await update.message.reply_text(f"✗ Cancelled: {', '.join(cleared)}.")
+    else:
+        await update.message.reply_text("Nothing pending. (For an active run use /cancel_run.)")
 
 
 @admin_only
@@ -300,6 +310,88 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         else "⚠️ Critical cookies missing. Re-export from logged-in salescenter session."
     )
     await update.message.reply_text(msg)
+
+
+# ---------- Brands whitelist ----------
+
+
+def _brands_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏ Edit list", callback_data="brands:edit")],
+        [InlineKeyboardButton("🗑 Clear (allow all)", callback_data="brands:clear")],
+    ])
+
+
+def _format_brands_message() -> str:
+    brands = get_active_brands_display()
+    if brands:
+        lines = ["🏷 <b>Allowed brands</b>", ""]
+        lines += [f"• {b}" for b in brands]
+        lines.append("")
+        lines.append("Only products with these brands will be listed.")
+    else:
+        lines = [
+            "🏷 <b>Allowed brands</b>",
+            "",
+            "<i>(empty — all brands processed)</i>",
+        ]
+    return "\n".join(lines)
+
+
+@admin_only
+async def cmd_brands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        _format_brands_message(),
+        parse_mode="HTML",
+        reply_markup=_brands_keyboard(),
+    )
+
+
+@admin_only
+async def on_brands_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    data = q.data or ""
+
+    if data == "brands:edit":
+        context.user_data["awaiting"] = "brands_edit"
+        await q.edit_message_text(
+            "Send the new brand list (comma-separated):\n\n"
+            "Example: <code>Songmics, Vasagle, Feandrea</code>\n\n"
+            "Send <code>none</code> to clear (allow all brands).\n"
+            "/cancel to keep the current list.",
+            parse_mode="HTML",
+        )
+        return
+
+    if data == "brands:clear":
+        await q.edit_message_text(
+            "⚠ Clear brand whitelist?\n\n"
+            "All brands will be processed (no filter).",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✓ Yes, clear", callback_data="brands:clear_yes"),
+                InlineKeyboardButton("✗ No", callback_data="brands:clear_no"),
+            ]]),
+        )
+        return
+
+    if data == "brands:clear_yes":
+        set_allowed_brands([])
+        await q.edit_message_text(
+            "✓ Cleared. All brands will now be processed.\n\n"
+            + _format_brands_message(),
+            parse_mode="HTML",
+            reply_markup=_brands_keyboard(),
+        )
+        return
+
+    if data == "brands:clear_no":
+        await q.edit_message_text(
+            _format_brands_message(),
+            parse_mode="HTML",
+            reply_markup=_brands_keyboard(),
+        )
+        return
 
 
 # ---------- Health check ----------
@@ -501,10 +593,16 @@ async def on_run_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         count = to_row - from_row + 1
         context.user_data["run_state"] = "awaiting_confirm"
 
+        brands = get_active_brands_display()
+        brands_line = (
+            f"  Brands: {', '.join(brands)}" if brands else "  Brands: ALL (no filter)"
+        )
+
         await q.edit_message_text(
             f"Confirm:\n"
-            f"  Range: {from_row}..{to_row} ({count} items)\n"
-            f"  Mode:  {mode.upper()}\n"
+            f"  Range:  {from_row}..{to_row} ({count} items)\n"
+            f"  Mode:   {mode.upper()}\n"
+            f"{brands_line}\n"
             + ("⚠️ LIVE will publish offers visible to buyers.\n" if mode == "live" else ""),
             reply_markup=InlineKeyboardMarkup([
                 [
@@ -716,20 +814,57 @@ def _register_button_handlers() -> None:
         "📋 Status": cmd_status,
         "🍪 Upload Cookies": cmd_upload_cookies,
         "🔍 Health": cmd_health,
+        "🏷 Brands": cmd_brands,
         "📁 Past Runs": cmd_runs,
         "⏹ Stop Run": cmd_cancel_run,
     })
+
+
+async def _handle_brands_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (update.message.text or "").strip()
+    if text.lower() in ("none", "clear", "all", "-"):
+        set_allowed_brands([])
+        context.user_data.pop("awaiting", None)
+        await update.message.reply_text(
+            "✓ Cleared. All brands will now be processed.\n\n" + _format_brands_message(),
+            parse_mode="HTML",
+            reply_markup=_brands_keyboard(),
+        )
+        return
+
+    brands = [b.strip() for b in text.split(",") if b.strip()]
+    if not brands:
+        await update.message.reply_text(
+            "Empty input. Send brands (comma-separated), 'none' to clear, or /cancel."
+        )
+        return
+
+    set_allowed_brands(brands)
+    context.user_data.pop("awaiting", None)
+    await update.message.reply_text(
+        f"✓ Updated. {len(brands)} brand(s) saved:\n"
+        + "\n".join(f"• {b}" for b in brands)
+        + "\n\nWill take effect on next /run.",
+        reply_markup=_brands_keyboard(),
+    )
 
 
 @admin_only
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
 
-    # Reply-keyboard button presses come in as plain text — dispatch before
-    # treating it as a /run conversation input.
+    # Reply-keyboard button presses always win. If the user is in a brands_edit
+    # or cookies prompt and taps another menu button, treat that as navigating
+    # away (clear the pending awaiting state) instead of accidentally feeding
+    # the button label into the prompt.
     handler = BUTTON_HANDLERS.get(text)
     if handler:
+        context.user_data.pop("awaiting", None)
         await handler(update, context)
+        return
+
+    if context.user_data.get("awaiting") == "brands_edit":
+        await _handle_brands_edit_text(update, context)
         return
 
     if context.user_data.get("run_state"):
@@ -767,8 +902,10 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("cancel_run", cmd_cancel_run))
     app.add_handler(CommandHandler("runs", cmd_runs))
     app.add_handler(CommandHandler("download", cmd_download))
+    app.add_handler(CommandHandler("brands", cmd_brands))
 
     app.add_handler(CallbackQueryHandler(on_run_button, pattern=r"^(mode:|confirm:|back:)"))
+    app.add_handler(CallbackQueryHandler(on_brands_button, pattern=r"^brands:"))
     app.add_handler(CallbackQueryHandler(on_download_button, pattern=r"^dl:"))
 
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))

@@ -17,8 +17,8 @@ from typing import Awaitable, Callable
 from loguru import logger
 
 from allegro_api import AllegroClient, DatadomeBlocked, SessionExpired
+from bot_state import get_active_brands_set
 from config import (
-    ALLOWED_BRANDS,
     LOGS_DIR,
     LONG_PAUSE_EVERY_N_ROWS,
     LONG_PAUSE_MAX,
@@ -275,11 +275,12 @@ class RunController:
 
         products_to_process = list(search.products)
         brand_filtered_out: list[str] = []
-        if ALLOWED_BRANDS:
+        active_brands = get_active_brands_set()
+        if active_brands:
             allowed: list[dict] = []
             for p in search.products:
                 brand = _extract_brand(p)
-                if brand and brand.lower() in ALLOWED_BRANDS:
+                if brand and brand.lower() in active_brands:
                     allowed.append(p)
                 else:
                     name = (p.get("name") or "?")[:40]
